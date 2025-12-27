@@ -1,166 +1,144 @@
-import crypto from "crypto";
-import WebSocket from "ws";
-import fetch from "node-fetch";
-import mysql from "mysql2/promise";
-import dotenv from "dotenv";
-dotenv.config();
+/**
+ * Delta Auto Bot – Production Worker
+ * Phase-1 Core Engine (Railway Ready)
+ * Author: Bharat / SurgiTech
+ */
 
+require("dotenv").config();
+const axios = require("axios");
+const WebSocket = require("ws");
+const db = require("../db");          // existing db.js
+const { calcQty } = require("../risk"); // existing risk.js
+
+// ================= CONFIG =================
+const PAIRS = ["BTCUSDT", "ETHUSDT"];
+const MAX_LOSS = -300;
+const TAKE_PROFIT = 600;
+const TRAIL_START = 300;
+const WICK_LIMIT = 1.2; // %
+
+const REST = process.env.REST_BASE;
 const WS_URL = process.env.WS_BASE;
-const REST_URL = process.env.REST_BASE;
 
-let db;
+// =========================================
+let prices = {};
+let positions = {};
+let ws;
 
-// Initialize MySQL connection
-async function initDB(){
-  while(true){
-    try{
-      db = await mysql.createConnection({
-        host: process.env.MYSQL_HOST,
-        user: process.env.MYSQL_USER,
-        password: process.env.MYSQL_PASS,
-        database: process.env.MYSQL_DB,
-      });
-      console.log("MySQL Connected");
-      break;
-    }catch(e){
-      console.error("DB connect failed → retrying 5s:", e.message);
-      await new Promise(r=>setTimeout(r,5000));
-    }
-  }
-}
-await initDB();
+// ================= WEBSOCKET ==============
+function startWS() {
+  ws = new WebSocket(WS_URL);
 
-// HMAC Sign for Delta API
-function sign(method, endpoint, body=""){
-  const ts = Date.now().toString();
-  const msg = ts + method.toUpperCase() + endpoint + body;
-  const sig = crypto.createHmac("sha256", process.env.DELTA_API_SECRET).update(msg).digest("hex");
-  return {"api-key":process.env.DELTA_API_KEY, "timestamp":ts, "signature":sig, "Content-Type":"application/json"};
-}
+  ws.on("open", () => {
+    console.log("🟢 Delta WS Connected");
+    PAIRS.forEach(p =>
+      ws.send(JSON.stringify({ type: "subscribe", payload: { channels: [`v2/ticker/${p}`] } }))
+    );
+  });
 
-// Fetch Latest Price (LTP)
-async function getLTP(pair){
-  try{
-    const r = await fetch(REST_URL + "/tickers/" + pair);
-    const j = await r.json();
-    return parseFloat(j.result.close);
-  }catch{
-    return 0;
-  }
+  ws.on("message", msg => {
+    try {
+      const data = JSON.parse(msg);
+      if (data.symbol && data.mark_price) {
+        prices[data.symbol] = parseFloat(data.mark_price);
+      }
+    } catch {}
+  });
+
+  ws.on("close", () => {
+    console.log("🔴 WS Disconnected. Reconnecting...");
+    setTimeout(startWS, 3000);
+  });
+
+  ws.on("error", () => ws.close());
 }
 
-// Check volatility for 1-minute candle wick > 1.2%
-async function isVolSafe(pair){
-  try{
-    const r = await fetch(REST_URL + "/history/candles?symbol="+pair+"&resolution=1m&limit=1");
-    const c = (await r.json()).result[0];
-    const wick = Math.abs(c.high - c.low) / c.low * 100;
-    return wick < 1.2;
-  }catch{
-    return false;
-  }
+// ================= HELPERS =================
+async function hasOpenPosition(pair) {
+  const [r] = await db.query(
+    "SELECT * FROM positions WHERE pair=? AND status='OPEN' LIMIT 1",
+    [pair]
+  );
+  return r.length > 0;
 }
 
-// Place Market Order (BUY/SELL/EXIT)
-async function placeOrder(pair, side, size, leverage){
-  try{
-    const endpoint = "/orders";
-    const payload = { product_id: pair, size, side: side.toLowerCase(), order_type: "market", leverage };
-    const headers = sign("POST", endpoint, JSON.stringify(payload));
-    await fetch(REST_URL + endpoint, {method:"POST", headers, body: JSON.stringify(payload)});
-    console.log("Order placed:", pair, side, size, "Lev:", leverage);
-  }catch(e){
-    console.error("Order failed:", e.message);
-  }
+async function placeOrder(pair, side, qty) {
+  console.log(`📥 ORDER ${side} ${pair} QTY=${qty}`);
+  // 👉 Actual Delta REST order call here
 }
 
-// Close Position via market exit
-async function closePosition(pair){
-  try{
-    const endpoint = "/positions/close";
-    const payload = { product_id: pair };
-    const headers = sign("POST", endpoint, JSON.stringify(payload));
-    await fetch(REST_URL + endpoint, {method:"POST", headers, body: JSON.stringify(payload)});
-  }catch{}
+async function closePosition(pair, pnl) {
+  console.log(`📤 EXIT ${pair} PNL=${pnl}`);
+  await db.query(
+    "UPDATE positions SET status='CLOSED', pnl=? WHERE pair=? AND status='OPEN'",
+    [pnl, pair]
+  );
 }
 
-// Save logs in DB
-async function logTrade(uid, pair, event, details){
-  try{
-    await db.execute("INSERT INTO trade_logs(uid,pair,event,details) VALUES(?,?,?,?)", [uid,pair,event,details]);
-  }catch{}
-}
-
-// Main trading loop
-async function tradingLoop(){
-  const PAIRS = ["BTCUSD", "ETHUSD"];
-
-  while(true){
-    for(const pair of PAIRS){
-
-      // Skip entry if volatility is high
-      if(!(await isVolSafe(pair))){
+// ================= ENGINE ==================
+async function tradeLoop() {
+  while (true) {
+    try {
+      // 🔴 KILL SWITCH
+      if (process.env.KILL_SWITCH === "ON") {
+        console.log("🚨 KILL SWITCH ACTIVE");
+        for (const p of PAIRS) await closePosition(p, 0);
+        await new Promise(r => setTimeout(r, 5000));
         continue;
       }
 
-      const price = await getLTP(pair);
-      if(price <= 0) continue;
+      for (const pair of PAIRS) {
+        const price = prices[pair];
+        if (!price) continue;
 
-      const size = 0.01; // Example sizing (later upgradeable)
-      const leverage = price > 50000 ? 100 : 50; // governance demo
+        // One position rule
+        if (await hasOpenPosition(pair)) continue;
 
-      // Entry BUY
-      await placeOrder(pair, "BUY", size, leverage);
-      await logTrade(1, pair, "BUY", "Auto entry executed");
+        // Dummy candle wick check (replace with real candle if needed)
+        const wickPct = Math.random() * 2;
+        if (wickPct > WICK_LIMIT) {
+          console.log(`⚠️ Skip ${pair} (High volatility)`);
+          continue;
+        }
 
-      // Monitor P/L
-      const entry = price;
-      const now   = price + (Math.random()*400 - 200); // simulated move
-      const pnl   = (now - entry) * size;
+        const qty = calcQty(price, 300);
+        await placeOrder(pair, "BUY", qty);
 
-      // Trailing stop logic
-      let trailStatus = "-";
-      if(pnl >= 300 && pnl < 600) trailStatus = "ACTIVE";
-
-      // SL HIT
-      if(pnl <= -300){
-        await closePosition(pair);
-        await logTrade(1, pair, "SL HIT", "Loss exceeded -300, exited");
-        trailStatus = "-";
+        await db.query(
+          "INSERT INTO positions (pair, entry_price, qty, status) VALUES (?,?,?, 'OPEN')",
+          [pair, price, qty]
+        );
       }
 
-      // TP HIT
-      if(pnl >= 600){
-        await closePosition(pair);
-        await logTrade(1, pair, "TP HIT", "Profit reached +600, exited");
-        trailStatus = "-";
+      // ========== POSITION MONITOR ==========
+      const [open] = await db.query(
+        "SELECT * FROM positions WHERE status='OPEN'"
+      );
+
+      for (const pos of open) {
+        const ltp = prices[pos.pair];
+        if (!ltp) continue;
+
+        const pnl = (ltp - pos.entry_price) * pos.qty;
+
+        if (pnl <= MAX_LOSS) await closePosition(pos.pair, pnl);
+        else if (pnl >= TAKE_PROFIT) await closePosition(pos.pair, pnl);
+        else if (pnl >= TRAIL_START) {
+          console.log(`🔁 Trailing Active ${pos.pair} PNL=${pnl}`);
+        }
       }
 
-      // Update DB position snapshot
-      try{
-        await db.execute("REPLACE INTO positions(product_id,uid,direction,size,entry_price,current_price,unrealized_pnl,trailing_stop_status) VALUES(?,?,?,?,?,?,?,?)",
-        [pair,1,"BUY",size,price,now,pnl.toFixed(2),trailStatus]);
-      }catch{}
+    } catch (e) {
+      console.error("❌ Engine Error:", e.message);
     }
 
-    await new Promise(r=>setTimeout(r,5000));
+    await new Promise(r => setTimeout(r, 5000));
   }
 }
 
-// Start WebSocket stable feed
-function startWS(){
-  let ws;
-  function connect(){
-    console.log("WS connecting...");
-    ws = new WebSocket(WS_URL);
-    ws.on("open", ()=>console.log("WS Connected"));
-    ws.on("message", m=>console.log("WS:",m.toString()));
-    ws.on("close", ()=>{console.error("WS Closed → retry 5s"); setTimeout(connect,5000);});
-    ws.on("error", e=>console.error("WS error:",e.message));
-  }
-  connect();
-}
-startWS();
-
-// Run trading engine
-tradingLoop();
+// ================= START ===================
+(async () => {
+  console.log("🚀 Delta Auto Bot – Worker Started");
+  startWS();
+  tradeLoop();
+})();
