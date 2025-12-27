@@ -2,18 +2,23 @@ import express from "express";
 
 const app = express();
 
-app.use(express.json());
-
-app.get("/", (req, res) => {
-  res.send("Delta Auto Bot is running");
-});
-
-app.get("/health", (req, res) => {
-  res.json({ status: "ok" });
-});
-
+// IMPORTANT: Railway gives PORT via env
 const PORT = process.env.PORT || 8080;
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+// Health check (VERY IMPORTANT)
+app.get("/", (req, res) => {
+  res.json({
+    status: "OK",
+    service: "delta-auto-bot",
+    time: new Date().toISOString()
+  });
+});
+
+// Optional health endpoint
+app.get("/health", (req, res) => {
+  res.send("healthy");
+});
+
+app.listen(PORT, () => {
+  console.log("Server running on port", PORT);
 });
