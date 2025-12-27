@@ -1,20 +1,19 @@
 import express from "express";
-import dotenv from "dotenv";
-
-dotenv.config();
 
 const app = express();
+
 app.use(express.json());
 
 app.get("/", (req, res) => {
-  res.json({ status: "delta-auto-bot running" });
+  res.send("Delta Auto Bot is running");
 });
 
 app.get("/health", (req, res) => {
-  res.json({ ok: true, time: new Date() });
+  res.json({ status: "ok" });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
+
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
 });
