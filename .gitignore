@@ -1,0 +1,13 @@
+# Environment secrets (never commit API keys)
+.env
+
+# Dependencies
+node_modules/
+
+# Local/worker runtime logs
+worker.log
+*.log
+
+# OS/system junk
+.DS_Store
+Thumbs.db
