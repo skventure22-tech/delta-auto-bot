@@ -4,14 +4,14 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "worker": "node worker.js"
+    "start": "node index.js"
   },
   "dependencies": {
-    "ccxt": "^4.2.91",
-    "dotenv": "^16.4.5",
-    "mysql2": "^3.9.2",
-    "ws": "^8.16.0",
-    "node-cron": "^3.0.3"
+    "express": "^4.19.2",
+    "mysql2": "^3.11.0",
+    "ws": "^8.18.0",
+    "axios": "^1.7.9",
+    "node-cron": "^3.0.3",
+    "dotenv": "^16.4.5"
   }
 }
