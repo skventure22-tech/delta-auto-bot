@@ -38,3 +38,4 @@ Optimized for **shared hosting dashboards** (PHP) with trading workers running o
 **This repository contains only the trading worker and backend sync layer. Frontend dashboards are managed separately on Hostinger.**
 "# delta-auto-bot" 
 "# delta-auto-bot" 
+"# delta-auto-bot" 
