@@ -1,20 +1,17 @@
-import express from 'express';
-import { router as dashboardWS } from './dashboard_ws.js';
-import { workerTick } from './worker.js';
+import express from "express";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const app = express();
+const PORT = process.env.PORT || 8080;
+
 app.use(express.json());
 
-app.use('/api', dashboardWS);
+app.get("/", (req, res) => {
+  res.send("Delta Auto Bot is running");
+});
 
-app.get('/', (_,res)=>res.send('Delta Auto Bot Running'));
-
-setInterval(()=>{
-  workerTick({
-    price: Math.random()*100,
-    rsi: Math.random()*100,
-    volatility: Math.random()*2
-  });
-}, 5000);
-
-app.listen(process.env.PORT);
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
