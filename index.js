@@ -1,24 +1,22 @@
 import express from "express";
 
 const app = express();
-
-// IMPORTANT: Railway gives PORT via env
 const PORT = process.env.PORT || 8080;
 
-// Health check (VERY IMPORTANT)
+// 🔥 REQUIRED FOR RAILWAY
 app.get("/", (req, res) => {
-  res.json({
+  res.status(200).json({
     status: "OK",
     service: "delta-auto-bot",
     time: new Date().toISOString()
   });
 });
 
-// Optional health endpoint
+// OPTIONAL: healthcheck
 app.get("/health", (req, res) => {
-  res.send("healthy");
+  res.status(200).send("healthy");
 });
 
 app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
