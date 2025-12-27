@@ -2,25 +2,19 @@ import WebSocket from "ws";
 import dotenv from "dotenv";
 dotenv.config();
 
-/**
- * Live price cache
- * prices = { BTCUSDT: 68000.5, ETHUSDT: 3500.2 }
- */
 export const prices = {};
+let ws, pingInterval;
 
-let ws;
-let pingInterval;
-
-/* ================= CONNECT WS ================= */
 export function connectWS() {
-  console.log("🟡 Delta WebSocket connecting...");
+  console.log("🟡 Delta WS connecting…");
 
-  ws = new WebSocket(process.env.WS_BASE || "wss://api.delta.exchange/v2/websocket");
+  ws = new WebSocket(
+    process.env.WS_BASE || "wss://api.delta.exchange/v2/websocket"
+  );
 
   ws.on("open", () => {
-    console.log("🟢 Delta WebSocket connected");
+    console.log("🟢 Delta WS connected");
 
-    /* Subscribe to BTC & ETH tickers */
     ws.send(JSON.stringify({
       type: "subscribe",
       payload: {
@@ -31,49 +25,31 @@ export function connectWS() {
       }
     }));
 
-    /* Keep-alive ping (Railway safe) */
     pingInterval = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.ping();
-      }
+      if (ws.readyState === WebSocket.OPEN) ws.ping();
     }, 15000);
   });
 
-  /* ================= MESSAGE ================= */
   ws.on("message", (msg) => {
     try {
-      const data = JSON.parse(msg.toString());
-
-      // Delta ticker message
-      if (data.symbol && data.mark_price) {
-        prices[data.symbol] = Number(data.mark_price);
+      const d = JSON.parse(msg.toString());
+      if (d.symbol && d.mark_price) {
+        prices[d.symbol] = Number(d.mark_price);
       }
-    } catch (e) {
-      // silently ignore malformed packets
-    }
+    } catch {}
   });
 
-  /* ================= CLOSE ================= */
   ws.on("close", () => {
-    console.error("🔴 WebSocket closed. Reconnecting in 3s...");
+    console.error("🔴 WS closed → reconnecting");
     cleanup();
     setTimeout(connectWS, 3000);
   });
 
-  /* ================= ERROR ================= */
-  ws.on("error", (err) => {
-    console.error("❌ WebSocket error:", err.message);
-    ws.close();
-  });
+  ws.on("error", () => ws.close());
 }
 
-/* ================= CLEANUP ================= */
 function cleanup() {
-  if (pingInterval) {
-    clearInterval(pingInterval);
-    pingInterval = null;
-  }
+  if (pingInterval) clearInterval(pingInterval);
 }
 
-/* ================= START ================= */
 connectWS();
